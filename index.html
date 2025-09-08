@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pro Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root{
+      --bg:#0e0f12;
+      --panel:#17181c;
+      --key:#202228;
+      --key-acc:#2a2d35;
+      --accent:#2dd4bf; /* mint */
+      --danger:#ef4444;
+      --text:#e5e7eb;
+      --muted:#9ca3af;
+      --shadow:0 10px 25px rgba(0,0,0,.35);
+      --radius:14px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; height:100svh; display:grid; place-items:center;
+      background: radial-gradient(60% 80% at 50% 0%, #151820, #0b0c10);
+      color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    .calc{
+      width:min(360px, 92vw);
+      background:var(--panel);
+      border-radius:var(--radius);
+      box-shadow: var(--shadow);
+      padding:18px;
+      display:grid; gap:14px;
+    }
+    .brand{
+      display:flex; justify-content:space-between; align-items:center;
+      font-size:12px; color:var(--muted); letter-spacing:.12em; text-transform:uppercase;
+    }
+    .screen{
+      background: linear-gradient(180deg,#111218,#0c0d12);
+      border:1px solid #1f2230; border-radius:12px;
+      padding:16px; text-align:right; min-height:78px;
+      display:flex; flex-direction:column; justify-content:center; gap:6px;
+    }
+    .hist{font-size:14px; color:var(--muted); min-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+    .value{font-variant-numeric: tabular-nums; font-size:32px; line-height:1.1; word-wrap:break-word;}
+    .grid{
+      display:grid; grid-template-columns: repeat(4, 1fr); gap:10px;
+    }
+    button{
+      appearance:none; border:none; cursor:pointer;
+      padding:16px; border-radius:12px; font-size:18px; color:var(--text);
+      background:var(--key); transition:transform .05s ease, filter .15s ease, background .2s;
+    }
+    button:active{ transform: translateY(1px) scale(0.995); }
+    .op{ background: var(--key-acc); }
+    .accent{ background: linear-gradient(135deg, var(--accent), #22c1a6); color:#0b0c10; font-weight:700; }
+    .danger{ background: linear-gradient(135deg, #f87171, var(--danger)); color:#0b0c10; font-weight:700; }
+    .wide{ grid-column: span 2; }
+    .muted{ color:var(--muted); }
+    .footer{
+      font-size:11px; color:var(--muted); text-align:center; margin-top:-6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="calc" role="application" aria-label="Calculator">
+    <div class="brand">
+      <div>Calculator</div>
+      <div class="muted">WSL + C/CGI</div>
+    </div>
+
+    <div class="screen" aria-live="polite">
+      <div class="hist" id="history">&nbsp;</div>
+      <div class="value" id="display">0</div>
+    </div>
+
+    <!-- Hidden form that posts to C backend on "=" -->
+    <form id="cgiForm" action="/cgi-bin/calculator.cgi" method="get">
+      <input type="hidden" name="a" id="fa">
+      <input type="hidden" name="b" id="fb">
+      <input type="hidden" name="op" id="fop">
+    </form>
+
+    <div class="grid">
+      <button type="button" class="danger" data-action="clear">AC</button>
+      <button type="button" class="op" data-action="del">DEL</button>
+      <button type="button" class="op" data-op="%">%</button>
+      <button type="button" class="op" data-op="/">÷</button>
+
+      <button type="button" data-num="7">7</button>
+      <button type="button" data-num="8">8</button>
+      <button type="button" data-num="9">9</button>
+      <button type="button" class="op" data-op="*">×</button>
+
+      <button type="button" data-num="4">4</button>
+      <button type="button" data-num="5">5</button>
+      <button type="button" data-num="6">6</button>
+      <button type="button" class="op" data-op="-">−</button>
+
+      <button type="button" data-num="1">1</button>
+      <button type="button" data-num="2">2</button>
+      <button type="button" data-num="3">3</button>
+      <button type="button" class="op" data-op="+">+</button>
+
+      <button type="button" class="wide" data-num="0">0</button>
+      <button type="button" data-num=".">.</button>
+      <button type="button" class="accent" data-action="equals">=</button>
+    </div>
+
+    <div class="footer">Press keys: 0–9 . + − × ÷ Enter, Backspace</div>
+  </div>
+
+  <script>
+    // Simple front-end state (no calculations here; "=" sends to C backend)
+    const display = document.getElementById('display');
+    const history = document.getElementById('history');
+    const fa = document.getElementById('fa');
+    const fb = document.getElementById('fb');
+    const fop = document.getElementById('fop');
+    const form = document.getElementById('cgiForm');
+
+    let cur = "0";
+    let prev = null;
+    let op = null;
+
+    const setDisplay = (v) => { display.textContent = v; };
+    const setHistory = () => {
+      history.textContent = (prev !== null && op) ? `${prev} ${op}` : '\u00A0';
+    };
+
+    const inputNum = (ch) => {
+      if (ch === "." && cur.includes(".")) return;
+      if (cur === "0" && ch !== ".") cur = ch;
+      else cur += ch;
+      setDisplay(cur);
+    };
+
+    const chooseOp = (o) => {
+      // % is unary (x% => x/100)
+      if (o === "%") {
+        if (!isFinite(parseFloat(cur))) return;
+        cur = String(parseFloat(cur) / 100);
+        setDisplay(cur);
+        return;
+      }
+      if (prev === null) {
+        prev = cur; cur = "0"; op = o;
+      } else {
+        // override operator before equals
+        op = o;
+      }
+      setHistory();
+      setDisplay(cur);
+    };
+
+    const clearAll = () => {
+      cur = "0"; prev = null; op = null;
+      setDisplay(cur); setHistory();
+    };
+
+    const delOne = () => {
+      if (cur.length <= 1 || (cur.length === 2 && cur.startsWith("-"))) cur = "0";
+      else cur = cur.slice(0, -1);
+      setDisplay(cur);
+    };
+
+    const equals = () => {
+      if (prev === null || !op) return;
+      // submit to C backend with a, b, op
+      fa.value = prev;
+      fb.value = cur;
+      const map = { "+":"add", "-":"sub", "*":"mul", "/":"div" };
+      fop.value = map[op] || "add";
+      form.submit();
+    };
+
+    document.querySelectorAll("[data-num]").forEach(btn => {
+      btn.addEventListener('click', () => inputNum(btn.dataset.num));
+    });
+    document.querySelectorAll("[data-op]").forEach(btn => {
+      btn.addEventListener('click', () => chooseOp(btn.dataset.op));
+    });
+    document.querySelector("[data-action='clear']").addEventListener('click', clearAll);
+    document.querySelector("[data-action='del']").addEventListener('click', delOne);
+    document.querySelector("[data-action='equals']").addEventListener('click', equals);
+
+    // Keyboard support
+    window.addEventListener('keydown', (e) => {
+      if (/^[0-9]$/.test(e.key)) inputNum(e.key);
+      else if (e.key === '.') inputNum('.');
+      else if (['+','-','*','/'].includes(e.key)) chooseOp(e.key);
+      else if (e.key === 'Enter' || e.key === '=') equals();
+      else if (e.key === 'Backspace') delOne();
+      else if (e.key.toLowerCase() === 'c' || e.key === 'Escape') clearAll();
+    });
+
+    setHistory();
+    setDisplay(cur);
+  </script>
+</body>
+</html>
